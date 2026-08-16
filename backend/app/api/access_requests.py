@@ -14,6 +14,7 @@ from app.models import (
 )
 from app.schemas.access_requests import AccessRequestCreate
 from app.schemas.consent import ConsentApproval
+from app.services.blockchain_service import blockchain_service
 
 router = APIRouter(
     prefix="/access-requests",
@@ -189,16 +190,66 @@ def approve_access_request(
     db.add(consent)
     db.flush()
 
+    start_timestamp = int(
+        approval.start_time.timestamp()
+    )
+
+    expiry_timestamp = int(
+        approval.expiry_time.timestamp()
+    )
+
+    try:
+        blockchain_result = blockchain_service.create_consent_on_chain(
+            owner_id=current_user.id,
+            organization_id=access_request.organization_id,
+            record_id=access_request.record_id,
+            purpose=access_request.purpose,
+            access_type=access_request.requested_access_type,
+            start_time=start_timestamp,
+            expiry_time=expiry_timestamp
+        )
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Blockchain consent creation failed: {str(exc)}"
+        )
+
+    consent.blockchain_consent_id = blockchain_result["consent_id"]
+    consent.blockchain_tx_hash = blockchain_result["transaction_hash"]
+
     access_request.consent_id = consent.id
     access_request.status = "APPROVED"
 
     db.commit()
     db.refresh(consent)
 
+    start_timestamp = int(
+        approval.start_time.timestamp()
+    )
+
+    expiry_timestamp = int(
+        approval.expiry_time.timestamp()
+    )
+
+    blockchain_result = blockchain_service.create_consent_on_chain(
+        owner_id=current_user.id,
+        organization_id=access_request.organization_id,
+        record_id=access_request.record_id,
+        purpose=access_request.purpose,
+        access_type=access_request.requested_access_type,
+        start_time=start_timestamp,
+        expiry_time=expiry_timestamp
+    )
+
+    consent.blockchain_tx_hash = blockchain_result["transaction_hash"]
+
     return {
         "message": "Access request approved and consent created",
         "request_id": access_request.id,
         "consent_id": consent.id,
+        "blockchain_consent_id": consent.blockchain_consent_id,
+        "blockchain_tx_hash": consent.blockchain_tx_hash,
         "record_id": consent.record_id,
         "organization_id": consent.organization_id,
         "status": consent.status,
@@ -297,6 +348,17 @@ def revoke_consent(
             detail="Only active consent can be revoked"
         )
 
+    try:
+        blockchain_result = blockchain_service.revoke_consent_on_chain(
+            consent.blockchain_consent_id
+        )
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Blockchain consent revocation failed: {str(exc)}"
+        )
+
     consent.status = "REVOKED"
     consent.revoked_at = datetime.utcnow()
 
@@ -306,6 +368,8 @@ def revoke_consent(
     return {
         "message": "Consent revoked successfully",
         "consent_id": consent.id,
+        "blockchain_consent_id": consent.blockchain_consent_id,
+        "blockchain_tx_hash": blockchain_result["transaction_hash"],
         "request_id": access_request.id,
         "status": consent.status,
         "revoked_at": consent.revoked_at

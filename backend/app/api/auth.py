@@ -20,10 +20,10 @@ def register(
     request: RegisterRequest,
     db: Session = Depends(get_db)
 ):
-    if request.role not in ["DATA_OWNER", "ORGANIZATION"]:
+    if request.role not in ["DATA_OWNER", "ORGANIZATION", "AUDITOR"]:
         raise HTTPException(
             status_code=400,
-            detail="Role must be DATA_OWNER or ORGANIZATION"
+            detail="Role must be DATA_OWNER, ORGANIZATION, or AUDITOR"
         )
 
     existing_user = db.query(User).filter(

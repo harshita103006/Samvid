@@ -49,6 +49,7 @@ class Consent(Base):
     expiry_time = Column(DateTime(timezone=True), nullable=False)
     status = Column(String(30), nullable=False, default="ACTIVE")
     blockchain_tx_hash = Column(String(255), nullable=True)
+    blockchain_consent_id = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     revoked_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -73,6 +74,7 @@ class AuditLog(Base):
     actor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     record_id = Column(Integer, ForeignKey("records.id"), nullable=True)
     consent_id = Column(Integer, ForeignKey("consents.id"), nullable=True)
+    blockchain_tx_hash = Column(String(255), nullable=True)
     action = Column(String(100), nullable=False)
     purpose = Column(String(255), nullable=True)
     result = Column(String(50), nullable=False)
