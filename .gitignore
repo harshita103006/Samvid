@@ -21,3 +21,13 @@ storage/
 # OS
 .DS_Store
 Thumbs.db
+
+# Node.js
+node_modules/
+
+# Blockchain build artifacts
+blockchain/build/
+
+# Agent configuration
+.agents/
+.claude/

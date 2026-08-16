@@ -15,7 +15,7 @@ from app.models import (
 from app.schemas.access_requests import AccessRequestCreate
 from app.schemas.consent import ConsentApproval
 from app.services.blockchain_service import blockchain_service
-
+from app.services.audit_service import create_audit_log
 router = APIRouter(
     prefix="/access-requests",
     tags=["Access Requests"]
@@ -220,29 +220,21 @@ def approve_access_request(
 
     access_request.consent_id = consent.id
     access_request.status = "APPROVED"
-
+    create_audit_log(
+        db=db,
+        actor_id=current_user.id,
+        record_id=consent.record_id,
+        consent_id=consent.id,
+        blockchain_tx_hash=consent.blockchain_tx_hash,
+        action="CONSENT_CREATED",
+        purpose=consent.purpose,
+        result="SUCCESS",
+        details="Consent created and recorded on blockchain"
+    )
     db.commit()
     db.refresh(consent)
 
-    start_timestamp = int(
-        approval.start_time.timestamp()
-    )
-
-    expiry_timestamp = int(
-        approval.expiry_time.timestamp()
-    )
-
-    blockchain_result = blockchain_service.create_consent_on_chain(
-        owner_id=current_user.id,
-        organization_id=access_request.organization_id,
-        record_id=access_request.record_id,
-        purpose=access_request.purpose,
-        access_type=access_request.requested_access_type,
-        start_time=start_timestamp,
-        expiry_time=expiry_timestamp
-    )
-
-    consent.blockchain_tx_hash = blockchain_result["transaction_hash"]
+ 
 
     return {
         "message": "Access request approved and consent created",
@@ -361,6 +353,35 @@ def revoke_consent(
 
     consent.status = "REVOKED"
     consent.revoked_at = datetime.utcnow()
+
+    blockchain_tx_hash = None
+
+    if consent.blockchain_consent_id:
+        try:
+            blockchain_result = blockchain_service.revoke_consent_on_chain(
+                consent.blockchain_consent_id
+            )
+
+            blockchain_tx_hash = blockchain_result["transaction_hash"]
+            consent.blockchain_tx_hash = blockchain_tx_hash
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Blockchain consent revocation failed: {str(exc)}"
+            )
+
+    create_audit_log(
+        db=db,
+        actor_id=current_user.id,
+        record_id=consent.record_id,
+        consent_id=consent.id,
+        blockchain_tx_hash=blockchain_tx_hash,
+        action="CONSENT_REVOKED",
+        purpose=consent.purpose,
+        result="SUCCESS",
+        details="Consent revoked and blockchain status updated"
+    )
 
     db.commit()
     db.refresh(consent)

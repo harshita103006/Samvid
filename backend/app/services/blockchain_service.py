@@ -103,6 +103,42 @@ class BlockchainService:
             "block_number": receipt.blockNumber
         }
 
+    def update_consent_on_chain(
+                self,
+                consent_id: int,
+                access_type: str,
+                expiry_time: int
+            ):
+                transaction = self.contract.functions.updateConsent(
+                    consent_id,
+                    access_type,
+                    expiry_time
+                ).build_transaction({
+                    "from": self.account,
+                    "nonce": self.w3.eth.get_transaction_count(
+                        self.account
+                    ),
+                    "chainId": self.w3.eth.chain_id
+                })
+
+                signed_transaction = self.w3.eth.account.sign_transaction(
+                    transaction,
+                    settings.blockchain_private_key
+                )
+
+                tx_hash = self.w3.eth.send_raw_transaction(
+                    signed_transaction.raw_transaction
+                )
+
+                receipt = self.w3.eth.wait_for_transaction_receipt(
+                    tx_hash
+                )
+
+                return {
+                    "transaction_hash": tx_hash.hex(),
+                    "block_number": receipt.blockNumber
+                }
+    
     def revoke_consent_on_chain(
         self,
         consent_id: int
