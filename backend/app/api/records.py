@@ -1,9 +1,12 @@
-from datetime import datetime
+from app.services.encryption_service import decrypt_file
+from app.services.record_service import save_uploaded_file
+from app.services.access_service import verify_record_access
 from pathlib import Path
-
+import mimetypes
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
+from app.services.encryption_service import decrypt_file
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user
@@ -13,7 +16,9 @@ from app.services.record_service import (
     save_uploaded_file,
     calculate_file_hash
 )
-from app.services.blockchain_service import blockchain_service
+
+
+
 router = APIRouter(prefix="/records", tags=["Records"])
 
 
@@ -38,8 +43,7 @@ def upload_record(
         )
 
     safe_filename = Path(file.filename).name
-    file_path = save_uploaded_file(file, safe_filename)
-    file_hash = calculate_file_hash(file_path)
+    file_path, file_hash = save_uploaded_file(file, safe_filename)
 
     record = Record(
         owner_id=current_user.id,
@@ -124,139 +128,12 @@ def get_record_file(
             detail="Record not found"
         )
 
-    consent = None
+    consent = verify_record_access(
+        record=record,
+        current_user=current_user,
+        db=db
+    )
 
-    # DATA OWNER
-    if current_user.role == "DATA_OWNER":
-
-        if record.owner_id != current_user.id:
-            raise HTTPException(
-                status_code=403,
-                detail="You do not own this record"
-            )
-
-    # ORGANIZATION
-    elif current_user.role == "ORGANIZATION":
-
-        from app.models import Organization, Consent, AccessRequest
-
-        organization = db.query(Organization).filter(
-            Organization.email == current_user.email
-        ).first()
-
-        if not organization:
-            raise HTTPException(
-                status_code=404,
-                detail="Organization profile not found"
-            )
-
-        consent = db.query(Consent).filter(
-            Consent.organization_id == organization.id,
-            Consent.record_id == record_id,
-            Consent.status == "ACTIVE"
-        ).order_by(
-            Consent.created_at.desc()
-        ).first()
-
-        if not consent:
-            audit_log = AuditLog(
-                actor_id=current_user.id,
-                record_id=record.id,
-                
-                action="RECORD_ACCESS",
-                result="DENIED",
-                details="No active consent found"
-            )
-
-            db.add(audit_log)
-            db.commit()
-
-            raise HTTPException(
-                status_code=403,
-                detail="No active consent found for this record"
-            )
-
-        # Check blockchain consent
-        try:
-            blockchain_consent = (
-                blockchain_service.get_consent_from_chain(
-                    consent.blockchain_consent_id
-                )
-            )
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Blockchain consent verification failed: {str(exc)}"
-            )
-
-        (
-            owner_id,
-            organization_id,
-            blockchain_record_id,
-            purpose,
-            access_type,
-            start_time,
-            expiry_time,
-            blockchain_status
-        ) = blockchain_consent
-
-        current_timestamp = int(
-            datetime.utcnow().timestamp()
-        )
-
-        # 0 = ACTIVE
-        # 1 = REVOKED
-        # 2 = EXPIRED
-
-        if blockchain_status != 0:
-            raise HTTPException(
-                status_code=403,
-                detail="Blockchain consent is not active"
-            )
-
-        if organization_id != organization.id:
-            raise HTTPException(
-                status_code=403,
-                detail="Consent organization mismatch"
-            )
-
-        if blockchain_record_id != record_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Consent record mismatch"
-            )
-
-        if purpose != consent.purpose:
-            raise HTTPException(
-                status_code=403,
-                detail="Consent purpose mismatch"
-            )
-
-        if access_type != consent.access_type:
-            raise HTTPException(
-                status_code=403,
-                detail="Consent access type mismatch"
-            )
-
-        if current_timestamp < start_time:
-            raise HTTPException(
-                status_code=403,
-                detail="Consent is not active yet"
-            )
-
-        if current_timestamp > expiry_time:
-            raise HTTPException(
-                status_code=403,
-                detail="Consent has expired"
-            )
-
-    else:
-        raise HTTPException(
-            status_code=403,
-            detail="You are not authorized to access this record"
-        )
-
-    # Check physical file
     file_path = Path(record.file_path)
 
     if not file_path.exists():
@@ -265,9 +142,20 @@ def get_record_file(
             detail="File not found on server"
         )
 
-    # Successful organization access
-    if current_user.role == "ORGANIZATION":
+    try:
+        with open(file_path, "rb") as file:
+            encrypted_data = file.read()
 
+        decrypted_data = decrypt_file(encrypted_data)
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"File decryption failed: {str(exc)}"
+        )
+
+    # Audit successful organization access
+    if current_user.role == "ORGANIZATION":
         audit_log = AuditLog(
             actor_id=current_user.id,
             record_id=record.id,
@@ -282,8 +170,89 @@ def get_record_file(
         db.add(audit_log)
         db.commit()
 
-    return FileResponse(
-        path=file_path,
-        filename=file_path.name,
-        media_type="application/octet-stream"
+    return Response(
+        content=decrypted_data,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{file_path.name}"'
+        }
+    )
+
+@router.get("/{record_id}/view")
+def view_record(
+    record_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    record = db.query(Record).filter(
+        Record.id == record_id
+    ).first()
+
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail="Record not found"
+        )
+
+    consent = verify_record_access(
+        record=record,
+        current_user=current_user,
+        db=db
+    )
+
+    # View-only access is intended for organizations
+    if current_user.role == "ORGANIZATION":
+
+        if consent.access_type != "VIEW_ONLY":
+            raise HTTPException(
+                status_code=403,
+                detail="View-only access is not permitted by this consent"
+            )
+
+    file_path = Path(record.file_path)
+
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="File not found on server"
+        )
+
+    try:
+        with open(file_path, "rb") as file:
+            encrypted_data = file.read()
+
+        decrypted_data = decrypt_file(encrypted_data)
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"File decryption failed: {str(exc)}"
+        )
+
+    if current_user.role == "ORGANIZATION":
+
+        audit_log = AuditLog(
+            actor_id=current_user.id,
+            record_id=record.id,
+            consent_id=consent.id,
+            blockchain_tx_hash=consent.blockchain_tx_hash,
+            action="RECORD_VIEW",
+            purpose=consent.purpose,
+            result="GRANTED",
+            details="View-only access granted after blockchain consent verification"
+        )
+
+        db.add(audit_log)
+        db.commit()
+
+    media_type, _ = mimetypes.guess_type(file_path.name)
+
+    return Response(
+        content=decrypted_data,
+        media_type=media_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'inline; filename="{file_path.name}"',
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache"
+        }
     )

@@ -31,3 +31,6 @@ blockchain/build/
 # Agent configuration
 .agents/
 .claude/
+
+artifacts/
+cache/
