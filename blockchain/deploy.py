@@ -1,15 +1,13 @@
 from pathlib import Path
+import json
+
 from web3 import Web3
 
 
 RPC_URL = "http://127.0.0.1:8545"
 
-ABI_PATH = Path(
-    "blockchain/build/contracts_ConsentManager_sol_ConsentManager.abi"
-)
-
-BIN_PATH = Path(
-    "blockchain/build/contracts_ConsentManager_sol_ConsentManager.bin"
+ARTIFACT_PATH = Path(
+    "artifacts/contracts/ConsentManager.sol/ConsentManager.json"
 )
 
 
@@ -20,12 +18,12 @@ if not w3.is_connected():
 
 account = w3.eth.accounts[0]
 
-abi = ABI_PATH.read_text()
-bytecode = BIN_PATH.read_text()
+artifact = json.loads(
+    ARTIFACT_PATH.read_text(encoding="utf-8")
+)
 
-import json
-
-abi = json.loads(abi)
+abi = artifact["abi"]
+bytecode = artifact["bytecode"]
 
 contract = w3.eth.contract(
     abi=abi,

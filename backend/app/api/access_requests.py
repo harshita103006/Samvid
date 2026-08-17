@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -331,7 +331,7 @@ def revoke_consent(
     if not consent:
         raise HTTPException(
             status_code=404,
-            detail="Active consent not found"
+            detail="Consent not found"
         )
 
     if consent.status != "ACTIVE":
@@ -340,36 +340,29 @@ def revoke_consent(
             detail="Only active consent can be revoked"
         )
 
+    if not consent.blockchain_consent_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Consent is not linked to blockchain"
+        )
+
     try:
-        blockchain_result = blockchain_service.revoke_consent_on_chain(
-            consent.blockchain_consent_id
+        blockchain_result = (
+            blockchain_service.revoke_consent_on_chain(
+                consent.blockchain_consent_id
+            )
         )
     except Exception as exc:
-        db.rollback()
         raise HTTPException(
             status_code=500,
             detail=f"Blockchain consent revocation failed: {str(exc)}"
         )
 
+    blockchain_tx_hash = blockchain_result["transaction_hash"]
+
     consent.status = "REVOKED"
-    consent.revoked_at = datetime.utcnow()
-
-    blockchain_tx_hash = None
-
-    if consent.blockchain_consent_id:
-        try:
-            blockchain_result = blockchain_service.revoke_consent_on_chain(
-                consent.blockchain_consent_id
-            )
-
-            blockchain_tx_hash = blockchain_result["transaction_hash"]
-            consent.blockchain_tx_hash = blockchain_tx_hash
-
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Blockchain consent revocation failed: {str(exc)}"
-            )
+    consent.revoked_at = datetime.now(timezone.utc)
+    consent.blockchain_tx_hash = blockchain_tx_hash
 
     create_audit_log(
         db=db,
@@ -383,14 +376,24 @@ def revoke_consent(
         details="Consent revoked and blockchain status updated"
     )
 
-    db.commit()
-    db.refresh(consent)
+    try:
+        db.commit()
+        db.refresh(consent)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Blockchain revocation succeeded, but database "
+                f"synchronization failed: {str(exc)}"
+            )
+        )
 
     return {
         "message": "Consent revoked successfully",
         "consent_id": consent.id,
         "blockchain_consent_id": consent.blockchain_consent_id,
-        "blockchain_tx_hash": blockchain_result["transaction_hash"],
+        "blockchain_tx_hash": blockchain_tx_hash,
         "request_id": access_request.id,
         "status": consent.status,
         "revoked_at": consent.revoked_at
