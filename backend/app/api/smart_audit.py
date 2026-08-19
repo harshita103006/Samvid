@@ -1,9 +1,9 @@
-from pathlib import Path
+﻿from pathlib import Path
 import shutil
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from auditor.audit_service import AuditService
+from app.services.audit_service import AuditService
 
 
 router = APIRouter(
