@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os 
 from app.api.auth import router as auth_router
+from app.core.database import engine, Base
+from app import models
 
 from app.api.records import router as records_router
 from app.api.organizations import router as organizations_router
@@ -14,6 +16,7 @@ app = FastAPI(
     description="Universal Blockchain-Based Consent Management and Secure Data Access Platform",
     version="1.0.0"
 )
+Base.metadata.create_all(bind=engine)
 
 cors_origins = os.getenv(
     "CORS_ORIGINS",
