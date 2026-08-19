@@ -1,6 +1,8 @@
 from fastapi import FastAPI
-
+from fastapi.middleware.cors import CORSMiddleware
+import os 
 from app.api.auth import router as auth_router
+
 from app.api.records import router as records_router
 from app.api.organizations import router as organizations_router
 from app.api.access_requests import router as access_requests_router
@@ -11,6 +13,19 @@ app = FastAPI(
     title="Samvid API",
     description="Universal Blockchain-Based Consent Management and Secure Data Access Platform",
     version="1.0.0"
+)
+
+cors_origins = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://localhost:5173"
+).split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in cors_origins],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
