@@ -1,11 +1,40 @@
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import Organization, Consent, Record, User
+from app.models import Organization, Consent, Record, User, AuditLog
 from app.services.blockchain_service import blockchain_service
+
+
+def _deny_access(
+    db: Session,
+    current_user: User,
+    record: Record,
+    consent: Consent | None,
+    reason: str
+):
+    audit_log = AuditLog(
+        actor_id=current_user.id,
+        record_id=record.id,
+        consent_id=consent.id if consent else None,
+        blockchain_tx_hash=(
+            consent.blockchain_tx_hash
+            if consent else None
+        ),
+        action="RECORD_VIEW",
+        purpose=consent.purpose if consent else None,
+        result="DENIED",
+        details=reason
+    )
+
+    db.add(audit_log)
+    db.commit()
+
+    raise HTTPException(
+        status_code=403,
+        detail=reason
+    )
 
 
 def verify_record_access(
@@ -57,15 +86,21 @@ def verify_record_access(
     ).first()
 
     if not consent:
-        raise HTTPException(
-            status_code=403,
-            detail="No active consent found for this record"
+        _deny_access(
+            db,
+            current_user,
+            record,
+            None,
+            "No active consent found for this record"
         )
 
     if consent.blockchain_consent_id is None:
-        raise HTTPException(
-            status_code=403,
-            detail="Blockchain consent reference missing"
+        _deny_access(
+            db,
+            current_user,
+            record,
+            consent,
+            "Blockchain consent reference missing"
         )
 
     try:
@@ -100,51 +135,75 @@ def verify_record_access(
     # 2 = EXPIRED
 
     if blockchain_status != 0:
-        raise HTTPException(
-            status_code=403,
-            detail="Blockchain consent is not active"
+        _deny_access(
+            db,
+            current_user,
+            record,
+            consent,
+            "Blockchain consent is not active"
         )
 
     if owner_id != record.owner_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Consent owner mismatch"
+        _deny_access(
+            db,
+            current_user,
+            record,
+            consent,
+            "Consent owner mismatch"
         )
 
     if organization_id != organization.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Consent organization mismatch"
+        _deny_access(
+            db,
+            current_user,
+            record,
+            consent,
+            "Consent organization mismatch"
         )
 
     if blockchain_record_id != record.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Consent record mismatch"
+        _deny_access(
+            db,
+            current_user,
+            record,
+            consent,
+            "Consent record mismatch"
         )
 
     if purpose != consent.purpose:
-        raise HTTPException(
-            status_code=403,
-            detail="Consent purpose mismatch"
+        _deny_access(
+            db,
+            current_user,
+            record,
+            consent,
+            "Consent purpose mismatch"
         )
 
     if access_type != consent.access_type:
-        raise HTTPException(
-            status_code=403,
-            detail="Consent access type mismatch"
+        _deny_access(
+            db,
+            current_user,
+            record,
+            consent,
+            "Consent access type mismatch"
         )
 
     if current_timestamp < start_time:
-        raise HTTPException(
-            status_code=403,
-            detail="Consent is not active yet"
+        _deny_access(
+            db,
+            current_user,
+            record,
+            consent,
+            "Consent is not active yet"
         )
 
     if current_timestamp > expiry_time:
-        raise HTTPException(
-            status_code=403,
-            detail="Consent has expired"
+        _deny_access(
+            db,
+            current_user,
+            record,
+            consent,
+            "Consent has expired"
         )
 
     return consent
