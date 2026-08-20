@@ -20,7 +20,7 @@ Base.metadata.create_all(bind=engine)
 
 cors_origins = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:3000,http://localhost:5173,https://frontend-samvid.vercel.app,https://samviddata-8484kndx.manus.space"
+    "http://localhost:3000,http://localhost:5173,https://frontend-samvid.vercel.app,https://samviddata-8484kndx.manus.space,https://frontend-samvid-80q1x9y4-ishani024342s-projects.vercel.app"
 ).split(",")
 
 app.add_middleware(
