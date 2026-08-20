@@ -304,3 +304,53 @@ def view_record(
             "Pragma": "no-cache"
         }
     )
+
+@router.delete("/{record_id}")
+def delete_record(
+    record_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != "DATA_OWNER":
+        raise HTTPException(
+            status_code=403,
+            detail="Only data owners can remove records"
+        )
+
+    record = db.query(Record).filter(
+        Record.id == record_id,
+        Record.owner_id == current_user.id
+    ).first()
+
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail="Record not found"
+        )
+
+    has_consent_history = db.query(Consent).filter(
+        Consent.record_id == record.id
+    ).first()
+
+    has_access_history = db.query(AccessRequest).filter(
+        AccessRequest.record_id == record.id
+    ).first()
+
+    if has_consent_history or has_access_history:
+        raise HTTPException(
+            status_code=409,
+            detail="Record cannot be removed while consent or access history exists"
+        )
+
+    file_path = Path(record.file_path)
+
+    db.delete(record)
+    db.commit()
+
+    if file_path.exists():
+        file_path.unlink()
+
+    return {
+        "message": "Record removed successfully",
+        "record_id": record_id
+    }
