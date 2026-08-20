@@ -9,7 +9,7 @@ from app.core.security import (
     create_access_token
 )
 from app.core.auth import get_current_user
-from app.models import User
+from app.models import Organization, User
 from app.schemas.auth import RegisterRequest
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -44,16 +44,27 @@ def register(
     )
 
     db.add(user)
+    db.flush()
+
+    if user.role == "ORGANIZATION":
+        db.add(
+            Organization(
+                name=user.name,
+                email=user.email,
+                description="Organization profile created during registration"
+            )
+        )
+
     db.commit()
     db.refresh(user)
 
     return {
-        "message": "User registered successfully",
-        "user_id": user.id,
-        "name": user.name,
-        "email": user.email,
-        "role": user.role
-    }
+            "message": "User registered successfully",
+            "user_id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "role": user.role
+        }
 
 
 @router.post("/login")
