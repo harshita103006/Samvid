@@ -226,6 +226,43 @@ def get_record_file(
         }
     )
 
+@router.get("/directory")
+def browse_owner_directory(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != "ORGANIZATION":
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization users can browse the owner directory"
+        )
+
+    rows = (
+        db.query(Record, User)
+        .join(User, Record.owner_id == User.id)
+        .order_by(User.name.asc(), Record.created_at.desc())
+        .all()
+    )
+
+    directory = {}
+
+    for record, owner in rows:
+        if owner.id not in directory:
+            directory[owner.id] = {
+                "owner_id": owner.id,
+                "owner_name": owner.name,
+                "records": []
+            }
+
+        directory[owner.id]["records"].append({
+            "record_id": record.id,
+            "title": record.title,
+            "record_type": record.record_type,
+            "created_at": record.created_at
+        })
+
+    return list(directory.values())
+
 @router.get("/{record_id}/view")
 def view_record(
     record_id: int,

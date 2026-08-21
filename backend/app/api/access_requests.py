@@ -300,6 +300,37 @@ def reject_access_request(
         "status": access_request.status
     }
 
+@router.get("/owner")
+def get_owner_access_requests(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != "DATA_OWNER":
+        raise HTTPException(
+            status_code=403,
+            detail="Only data owners can view incoming access requests"
+        )
+
+    requests = (
+        db.query(AccessRequest)
+        .join(Record, AccessRequest.record_id == Record.id)
+        .filter(Record.owner_id == current_user.id)
+        .order_by(AccessRequest.requested_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "request_id": r.id,
+            "organization_id": r.organization_id,
+            "record_id": r.record_id,
+            "purpose": r.purpose,
+            "requested_access_type": r.requested_access_type,
+            "status": r.status,
+            "requested_at": r.requested_at
+        }
+        for r in requests
+    ]
 
 @router.post("/{request_id}/revoke")
 def revoke_consent(
