@@ -1,74 +1,74 @@
 from app.services.encryption_service import decrypt_file
-from app.services.record_service import save_uploaded_file
+from app.services.record_service import save_uploaded_file, calculate_file_hash
 from app.services.access_service import verify_record_access
+
 from pathlib import Path
 import mimetypes
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
-from app.services.encryption_service import decrypt_file
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models import Record, User, AuditLog, AccessRequest, Consent
-from app.services.record_service import (
-    save_uploaded_file,
-    calculate_file_hash
-)
-
 
 
 router = APIRouter(prefix="/records", tags=["Records"])
-@router.delete("/{record_id}")
-def delete_record(
-    record_id: int,
+
+
+# =====================================================
+# OWNER RECORD SEARCH BY EMAIL (NEW)
+# Organization uses owner email to find records
+# =====================================================
+
+@router.get("/by-owner-email")
+def get_owner_records_by_email(
+    email: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if current_user.role != "DATA_OWNER":
+
+    if current_user.role != "ORGANIZATION":
         raise HTTPException(
             status_code=403,
-            detail="Only data owners can remove records"
+            detail="Only organizations can search owner records"
         )
 
-    record = db.query(Record).filter(
-        Record.id == record_id,
-        Record.owner_id == current_user.id
+    owner = db.query(User).filter(
+        User.email == email,
+        User.role == "DATA_OWNER"
     ).first()
 
-    if not record:
+    if not owner:
         raise HTTPException(
             status_code=404,
-            detail="Record not found"
+            detail="Data owner not found"
         )
 
-    has_consent_history = db.query(Consent).filter(
-        Consent.record_id == record.id
-    ).first()
 
-    has_access_history = db.query(AccessRequest).filter(
-        AccessRequest.record_id == record.id
-    ).first()
+    records = db.query(Record).filter(
+        Record.owner_id == owner.id
+    ).order_by(
+        Record.created_at.desc()
+    ).all()
 
-    if has_consent_history or has_access_history:
-        raise HTTPException(
-            status_code=409,
-            detail="Record cannot be removed while consent or access history exists"
-        )
 
-    file_path = Path(record.file_path)
+    return [
+        {
+            "record_id": record.id,
+            "title": record.title,
+            "record_type": record.record_type,
+            "created_at": record.created_at
+        }
+        for record in records
+    ]
 
-    db.delete(record)
-    db.commit()
 
-    if file_path.exists():
-        file_path.unlink()
 
-    return {
-        "message": "Record removed successfully",
-        "record_id": record_id
-    }
+# =====================================================
+# UPLOAD RECORD (OWNER)
+# =====================================================
 
 @router.post("/upload")
 def upload_record(
@@ -78,11 +78,13 @@ def upload_record(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+
     if current_user.role != "DATA_OWNER":
         raise HTTPException(
             status_code=403,
             detail="Only data owners can upload records"
         )
+
 
     if not file.filename:
         raise HTTPException(
@@ -90,8 +92,14 @@ def upload_record(
             detail="File name is required"
         )
 
+
     safe_filename = Path(file.filename).name
-    file_path, file_hash = save_uploaded_file(file, safe_filename)
+
+    file_path, file_hash = save_uploaded_file(
+        file,
+        safe_filename
+    )
+
 
     record = Record(
         owner_id=current_user.id,
@@ -101,9 +109,11 @@ def upload_record(
         file_hash=file_hash
     )
 
+
     db.add(record)
     db.commit()
     db.refresh(record)
+
 
     return {
         "message": "Record uploaded successfully",
@@ -114,14 +124,23 @@ def upload_record(
     }
 
 
+
+# =====================================================
+# OWNER GET OWN RECORDS
+# =====================================================
+
 @router.get("")
 def get_my_records(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+
     records = db.query(Record).filter(
         Record.owner_id == current_user.id
-    ).order_by(Record.created_at.desc()).all()
+    ).order_by(
+        Record.created_at.desc()
+    ).all()
+
 
     return [
         {
@@ -135,22 +154,30 @@ def get_my_records(
     ]
 
 
+
+# =====================================================
+# GET SINGLE RECORD
+# =====================================================
+
 @router.get("/{record_id}")
 def get_record(
     record_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+
     record = db.query(Record).filter(
         Record.id == record_id,
         Record.owner_id == current_user.id
     ).first()
+
 
     if not record:
         raise HTTPException(
             status_code=404,
             detail="Record not found"
         )
+
 
     return {
         "record_id": record.id,
@@ -160,71 +187,12 @@ def get_record(
         "file_hash": record.file_hash,
         "created_at": record.created_at
     }
-@router.get("/{record_id}/file")
-def get_record_file(
-    record_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    record = db.query(Record).filter(
-        Record.id == record_id
-    ).first()
 
-    if not record:
-        raise HTTPException(
-            status_code=404,
-            detail="Record not found"
-        )
 
-    consent = verify_record_access(
-        record=record,
-        current_user=current_user,
-        db=db
-    )
 
-    file_path = Path(record.file_path)
-
-    if not file_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="File not found on server"
-        )
-
-    try:
-        with open(file_path, "rb") as file:
-            encrypted_data = file.read()
-
-        decrypted_data = decrypt_file(encrypted_data)
-
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"File decryption failed: {str(exc)}"
-        )
-
-    # Audit successful organization access
-    if current_user.role == "ORGANIZATION":
-        audit_log = AuditLog(
-            actor_id=current_user.id,
-            record_id=record.id,
-            consent_id=consent.id,
-            blockchain_tx_hash=consent.blockchain_tx_hash,
-            action="RECORD_ACCESS",
-            purpose=consent.purpose,
-            result="GRANTED",
-            details="Access granted after blockchain consent verification"
-        )
-
-        db.add(audit_log)
-        db.commit()
-
-    return Response(
-        content=decrypted_data,
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{file_path.name}"'
-        }
-    )
+# =====================================================
+# VIEW FILE
+# =====================================================
 
 @router.get("/directory")
 def browse_owner_directory(
@@ -269,15 +237,18 @@ def view_record(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+
     record = db.query(Record).filter(
         Record.id == record_id
     ).first()
+
 
     if not record:
         raise HTTPException(
             status_code=404,
             detail="Record not found"
         )
+
 
     consent = verify_record_access(
         record=record,
@@ -285,38 +256,37 @@ def view_record(
         db=db
     )
 
-    # View-only access is intended for organizations
+
     if current_user.role == "ORGANIZATION":
 
         if consent.access_type != "VIEW_ONLY":
             raise HTTPException(
                 status_code=403,
-                detail="View-only access is not permitted by this consent"
+                detail="View-only access not permitted"
             )
 
+
     file_path = Path(record.file_path)
+
 
     if not file_path.exists():
         raise HTTPException(
             status_code=404,
-            detail="File not found on server"
+            detail="File not found"
         )
 
-    try:
-        with open(file_path, "rb") as file:
-            encrypted_data = file.read()
 
-        decrypted_data = decrypt_file(encrypted_data)
+    with open(file_path, "rb") as file:
+        encrypted_data = file.read()
 
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"File decryption failed: {str(exc)}"
-        )
+
+    decrypted_data = decrypt_file(encrypted_data)
+
+
 
     if current_user.role == "ORGANIZATION":
 
-        audit_log = AuditLog(
+        audit = AuditLog(
             actor_id=current_user.id,
             record_id=record.id,
             consent_id=consent.id,
@@ -324,23 +294,31 @@ def view_record(
             action="RECORD_VIEW",
             purpose=consent.purpose,
             result="GRANTED",
-            details="View-only access granted after blockchain consent verification"
+            details="Secure view access granted"
         )
 
-        db.add(audit_log)
+        db.add(audit)
         db.commit()
 
+
+
     media_type, _ = mimetypes.guess_type(file_path.name)
+
 
     return Response(
         content=decrypted_data,
         media_type=media_type or "application/octet-stream",
         headers={
             "Content-Disposition": f'inline; filename="{file_path.name}"',
-            "Cache-Control": "no-store, no-cache, must-revalidate",
-            "Pragma": "no-cache"
+            "Cache-Control": "no-store"
         }
     )
+
+
+
+# =====================================================
+# DELETE RECORD
+# =====================================================
 
 @router.delete("/{record_id}")
 def delete_record(
@@ -348,16 +326,19 @@ def delete_record(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+
     if current_user.role != "DATA_OWNER":
         raise HTTPException(
             status_code=403,
             detail="Only data owners can remove records"
         )
 
+
     record = db.query(Record).filter(
         Record.id == record_id,
         Record.owner_id == current_user.id
     ).first()
+
 
     if not record:
         raise HTTPException(
@@ -365,27 +346,37 @@ def delete_record(
             detail="Record not found"
         )
 
-    has_consent_history = db.query(Consent).filter(
+
+    if db.query(Consent).filter(
         Consent.record_id == record.id
-    ).first()
+    ).first():
 
-    has_access_history = db.query(AccessRequest).filter(
-        AccessRequest.record_id == record.id
-    ).first()
-
-    if has_consent_history or has_access_history:
         raise HTTPException(
             status_code=409,
-            detail="Record cannot be removed while consent or access history exists"
+            detail="Record has consent history"
         )
 
+
+    if db.query(AccessRequest).filter(
+        AccessRequest.record_id == record.id
+    ).first():
+
+        raise HTTPException(
+            status_code=409,
+            detail="Record has access history"
+        )
+
+
     file_path = Path(record.file_path)
+
 
     db.delete(record)
     db.commit()
 
+
     if file_path.exists():
         file_path.unlink()
+
 
     return {
         "message": "Record removed successfully",

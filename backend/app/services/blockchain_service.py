@@ -13,6 +13,7 @@ ABI_PATH = BASE_DIR / "app" / "blockchain_abi.json"
 class BlockchainService:
 
     def __init__(self):
+
         self.w3 = Web3(
             Web3.HTTPProvider(settings.blockchain_rpc_url)
         )
@@ -39,13 +40,16 @@ class BlockchainService:
             ).address
         )
 
+
     def get_blockchain_info(self):
+
         return {
             "connected": self.w3.is_connected(),
             "chain_id": self.w3.eth.chain_id,
             "account": self.account,
             "contract_address": self.contract.address
         }
+
 
     def create_consent_on_chain(
         self,
@@ -57,6 +61,7 @@ class BlockchainService:
         start_time: int,
         expiry_time: int
     ):
+
         transaction = self.contract.functions.createConsent(
             owner_id,
             organization_id,
@@ -66,115 +71,182 @@ class BlockchainService:
             start_time,
             expiry_time
         ).build_transaction({
+
             "from": self.account,
+
             "nonce": self.w3.eth.get_transaction_count(
                 self.account
             ),
+
             "chainId": self.w3.eth.chain_id
+
         })
+
 
         signed_transaction = self.w3.eth.account.sign_transaction(
             transaction,
             settings.blockchain_private_key
         )
 
+
         tx_hash = self.w3.eth.send_raw_transaction(
             signed_transaction.raw_transaction
         )
+
 
         receipt = self.w3.eth.wait_for_transaction_receipt(
             tx_hash
         )
 
-        events = self.contract.events.ConsentCreated().process_receipt(
-            receipt
-        )
 
-        if not events:
-            raise RuntimeError(
-                "ConsentCreated event not found in transaction"
+        blockchain_consent_id = None
+
+
+        # Try reading ConsentCreated event
+        try:
+
+            events = self.contract.events.ConsentCreated().process_receipt(
+                receipt
             )
 
-        blockchain_consent_id = events[0]["args"]["consentId"]
+
+            if events:
+
+                blockchain_consent_id = (
+                    events[0]["args"]["consentId"]
+                )
+
+
+        except Exception as exc:
+
+            print(
+                "Event decoding failed:",
+                str(exc)
+            )
+
+
+        # Fallback if event missing
+        if blockchain_consent_id is None:
+            raise Exception("Could not get blockchain consent id from ConsentCreated event")
+
 
         return {
+
             "consent_id": blockchain_consent_id,
+
             "transaction_hash": tx_hash.hex(),
+
             "block_number": receipt.blockNumber
+
         }
 
+
+
     def update_consent_on_chain(
-                self,
-                consent_id: int,
-                access_type: str,
-                expiry_time: int
-            ):
-                transaction = self.contract.functions.updateConsent(
-                    consent_id,
-                    access_type,
-                    expiry_time
-                ).build_transaction({
-                    "from": self.account,
-                    "nonce": self.w3.eth.get_transaction_count(
-                        self.account
-                    ),
-                    "chainId": self.w3.eth.chain_id
-                })
+        self,
+        consent_id: int,
+        access_type: str,
+        expiry_time: int
+    ):
 
-                signed_transaction = self.w3.eth.account.sign_transaction(
-                    transaction,
-                    settings.blockchain_private_key
-                )
+        transaction = self.contract.functions.updateConsent(
+            consent_id,
+            access_type,
+            expiry_time
+        ).build_transaction({
 
-                tx_hash = self.w3.eth.send_raw_transaction(
-                    signed_transaction.raw_transaction
-                )
+            "from": self.account,
 
-                receipt = self.w3.eth.wait_for_transaction_receipt(
-                    tx_hash
-                )
+            "nonce": self.w3.eth.get_transaction_count(
+                self.account
+            ),
 
-                return {
-                    "transaction_hash": tx_hash.hex(),
-                    "block_number": receipt.blockNumber
-                }
-    
+            "chainId": self.w3.eth.chain_id
+
+        })
+
+
+        signed_transaction = self.w3.eth.account.sign_transaction(
+            transaction,
+            settings.blockchain_private_key
+        )
+
+
+        tx_hash = self.w3.eth.send_raw_transaction(
+            signed_transaction.raw_transaction
+        )
+
+
+        receipt = self.w3.eth.wait_for_transaction_receipt(
+            tx_hash
+        )
+
+
+        return {
+
+            "transaction_hash": tx_hash.hex(),
+
+            "block_number": receipt.blockNumber
+
+        }
+
+
+
     def revoke_consent_on_chain(
         self,
         consent_id: int
     ):
+
         transaction = self.contract.functions.revokeConsent(
             consent_id
         ).build_transaction({
+
             "from": self.account,
+
             "nonce": self.w3.eth.get_transaction_count(
                 self.account
             ),
+
             "chainId": self.w3.eth.chain_id
+
         })
+
 
         signed_transaction = self.w3.eth.account.sign_transaction(
             transaction,
             settings.blockchain_private_key
         )
 
+
         tx_hash = self.w3.eth.send_raw_transaction(
             signed_transaction.raw_transaction
         )
+
 
         receipt = self.w3.eth.wait_for_transaction_receipt(
             tx_hash
         )
 
+
         return {
+
             "transaction_hash": tx_hash.hex(),
+
             "block_number": receipt.blockNumber
+
         }
-    def get_consent_from_chain(self, consent_id: int):
-        consent = self.contract.functions.getConsent(
+
+
+
+    def get_consent_from_chain(
+        self,
+        consent_id: int
+    ):
+
+        return self.contract.functions.getConsent(
             consent_id
         ).call()
 
-        return consent
+
 
 blockchain_service = BlockchainService()

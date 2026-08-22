@@ -128,7 +128,65 @@ def get_my_access_requests(
         }
         for access_request in requests
     ]
+# =====================================================
+# DATA OWNER RECEIVED ACCESS REQUESTS
+# =====================================================
 
+# =====================================================
+# DATA OWNER RECEIVED ACCESS REQUESTS
+# =====================================================
+
+@router.get("/received")
+def get_received_access_requests(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+
+    if current_user.role != "DATA_OWNER":
+        raise HTTPException(
+            status_code=403,
+            detail="Only data owners can view received requests"
+        )
+
+
+    requests = (
+        db.query(
+            AccessRequest,
+            Record,
+            Organization
+        )
+        .join(
+            Record,
+            AccessRequest.record_id == Record.id
+        )
+        .join(
+            Organization,
+            AccessRequest.organization_id == Organization.id
+        )
+        .filter(
+            Record.owner_id == current_user.id
+        )
+        .order_by(
+            AccessRequest.requested_at.desc()
+        )
+        .all()
+    )
+
+
+    return [
+        {
+            "request_id": request.id,
+            "organization_id": request.organization_id,
+            "organization_email": organization.email,
+            "record_id": request.record_id,
+            "record_title": record.title,
+            "purpose": request.purpose,
+            "requested_access_type": request.requested_access_type,
+            "status": request.status,
+            "requested_at": request.requested_at
+        }
+        for request, record, organization in requests
+    ]
 
 @router.post("/{request_id}/approve")
 def approve_access_request(
@@ -189,7 +247,8 @@ def approve_access_request(
 
     db.add(consent)
     db.flush()
-
+    access_request.consent_id = consent.id
+    db.flush()
     start_timestamp = int(
         approval.start_time.timestamp()
     )
